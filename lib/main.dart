@@ -1,123 +1,162 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:hive/hive.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
+
+import 'app/data/providers/viewmodel/theme_model.dart';
+import 'firebase_options.dart';
 import 'package:flutter/material.dart';
+import 'app/core/di/locator.dart';
+import 'app/ui/app.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:convert';
 
-void main() {
-  runApp(const MyApp());
-}
+// Khởi tạo FlutterLocalNotificationsPlugin
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  final appDocumentDirectory = await getApplicationDocumentsDirectory();
+  Hive.init(appDocumentDirectory.path);
+  var quizBox = await Hive.openBox('quizHistory');
 
-  // This widget is the root of your application.
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
-    );
+  try {
+    final distractors = message.data['distractors'] != null
+        ? jsonDecode(message.data['distractors']) as List<dynamic>
+        : [];
+    final quizData = {
+      'question': message.data['question'] ??
+          message.notification?.body ??
+          'Không có câu hỏi',
+      'distractors': distractors.cast<String>(),
+      'answer': message.data['answer'] ?? 'Không có đáp án',
+      'hint': message.data['hint'] ?? 'Không có gợi ý',
+      'explanation': message.data['explanation'] ?? 'Không có giải thích',
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+    await quizBox.add(quizData);
+    print('Lưu câu hỏi từ thông báo nền: ${quizData['question']}');
+
+    // Hiển thị thông báo cục bộ
+    await _showNotification(quizData['question'], quizData);
+  } catch (e) {
+    print('Lỗi khi lưu thông báo nền vào Hive: $e');
+  } finally {
+    await quizBox.close();
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
+// Hiển thị thông báo cục bộ
+Future<void> _showNotification(
+    String message, Map<String, dynamic> quizData) async {
+  const AndroidNotificationDetails androidPlatformChannelSpecifics =
+      AndroidNotificationDetails(
+    'quiz_channel',
+    'Quiz Notifications',
+    channelDescription: 'Thông báo câu đố hàng ngày',
+    importance: Importance.max,
+    priority: Priority.high,
+    showWhen: true,
+  );
+  const NotificationDetails platformChannelSpecifics =
+      NotificationDetails(android: androidPlatformChannelSpecifics);
+  await flutterLocalNotificationsPlugin.show(
+    0,
+    'Đố bạn',
+    message,
+    platformChannelSpecifics,
+    payload: jsonEncode(quizData), // Truyền toàn bộ quizData qua payload
+  );
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+  // Khởi tạo Hive
+  final appDocumentDirectory = await getApplicationDocumentsDirectory();
+  Hive.init(appDocumentDirectory.path);
+  await Hive.openBox('quizHistory');
 
-  @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
-    );
-  }
+  // Khởi tạo Flutter Local Notifications
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const InitializationSettings initializationSettings =
+      InitializationSettings(android: initializationSettingsAndroid);
+  await flutterLocalNotificationsPlugin.initialize(
+    initializationSettings,
+    onDidReceiveNotificationResponse: (NotificationResponse response) async {
+      if (response.payload != null) {
+        final quizData = jsonDecode(response.payload!) as Map<String, dynamic>;
+        print('Nhấn vào thông báo: ${quizData['question']}');
+        // final navigator = MyApp.navigatorKey.currentState;
+        // if (navigator != null) {
+        //   navigator.pushNamed(Routes.quizScreen, arguments: quizData);
+        // }
+      }
+    },
+  );
+
+  // Yêu cầu quyền thông báo
+  await FirebaseMessaging.instance.requestPermission();
+  await FirebaseMessaging.instance.subscribeToTopic('quiz_users');
+  print('Subscribed to quiz_users');
+
+  await setUpLocator();
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => locator<ThemeModel>()),
+      ],
+      child: const MyApp(),
+    ),
+  );
+
+  // Xử lý thông báo khi app khởi động từ terminated
+  FirebaseMessaging.instance.getInitialMessage().then((RemoteMessage? message) {
+    if (message != null) {
+      print('Khởi động từ thông báo: ${message.notification?.body}');
+      // _navigateToQuizScreen(message);
+    }
+  });
+
+  // Xử lý thông báo khi app chạy foreground
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+    print('Thông báo foreground: ${message.notification?.body}');
+    final distractors =
+        jsonDecode(message.data['distractors'] ?? '[]') as List<dynamic>;
+    final quizData = {
+      'question': message.data['question'] ??
+          message.notification?.body ??
+          'Không có câu hỏi',
+      'distractors': distractors.cast<String>(),
+      'answer': message.data['answer'] ?? 'Không có đáp án',
+      'hint': message.data['hint'] ?? 'Không có gợi ý',
+      'explanation': message.data['explanation'] ?? 'Không có giải thích',
+    };
+    _showNotification(quizData['question'], quizData);
+  });
+
+  // Xử lý khi nhấn thông báo từ background
+  FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+    print('Mở từ thông báo: ${message.notification?.body}');
+    // _navigateToQuizScreen(message);
+  });
 }
+
+// // Điều hướng tới màn hình quiz
+// void _navigateToQuizScreen(RemoteMessage message) {
+//   if (message.data['click_action'] == 'FLUTTER_NOTIFICATION_CLICK') {
+//     final navigator = MyApp.navigatorKey.currentState;
+//     if (navigator != null) {
+//       navigator.pushNamed(Routes.quizScreen, arguments: message.data);
+//       print('Điều hướng tới quiz_screen với dữ liệu: ${message.data}');
+//     } else {
+//       print('Navigator chưa sẵn sàng');
+//     }
+//   }
+// }
